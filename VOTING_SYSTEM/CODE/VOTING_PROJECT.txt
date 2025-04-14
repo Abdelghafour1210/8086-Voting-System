@@ -1,0 +1,298 @@
+DATA SEGMENT
+    PORTA    EQU 00H         ; LCD Data Port
+    PORTB    EQU 02H         ; LCD Control Port
+    PORTC    EQU 04H         ; Buttons Port
+    PORT_CON EQU 06H         ; 8255 Control Register
+    
+    Electeur1Number DB 0     ; Candidate 1 votes
+    Electeur2Number DB 0     ; Candidate 2 votes
+    
+    ; LCD Strings
+    StringVoted1     DB "You voted for candidat1 ",0
+    StringVoted2     DB "You voted for candidat2 ",0
+    StringVoteFinished DB "Voting Finished!        ",0
+    StringElecteur1Wins DB "candidat1 Wins!        ",0
+    StringElecteur2Wins DB "candidat2 Wins!        ",0
+    StringTie         DB "Tie!                  ",0
+    StringResultLine1 DB "candidat1:     candidat2:   ",0
+DATA ENDS
+
+CODE SEGMENT
+    ASSUME CS:CODE, DS:DATA
+    ORG 0100H
+
+START:
+    MOV AX, DATA
+    MOV DS, AX
+    
+    ; Initialize 8255 (PortA/B/UpperC=Out, LowerC=In)
+    MOV DX, PORT_CON
+    MOV AL, 89H             ; Control word: 10001001B
+    OUT DX, AL
+    
+    ; Initialize LCD
+    CALL LCD_INIT
+    
+MAIN_LOOP:
+    ; Read button states
+    MOV DX, PORTC
+    IN AL, DX
+    AND AL, 0BH             ; Mask PC0(01H), PC1(02H), PC3(08H)
+    
+    ; Check buttons
+    TEST AL, 01H            ; Candidate1 button
+    JZ HANDLE_ELECTEUR1
+    
+    TEST AL, 02H            ; Candidate2 button
+    JZ HANDLE_ELECTEUR2
+    
+    TEST AL, 08H            ; End Vote button
+    JZ HANDLE_END_VOTE
+    
+    JMP MAIN_LOOP
+
+HANDLE_ELECTEUR1:
+    CALL DEBOUNCE
+    INC Electeur1Number
+    CALL ShowVoted1
+    JMP MAIN_LOOP
+
+HANDLE_ELECTEUR2:
+    CALL DEBOUNCE
+    INC Electeur2Number
+    CALL ShowVoted2
+    JMP MAIN_LOOP
+
+HANDLE_END_VOTE:
+    CALL DEBOUNCE
+    JMP FINISH_VOTING
+
+;========== LCD FUNCTIONS ==========
+LCD_INIT PROC NEAR
+    ; Power-up delay
+    MOV CX, 8000H
+INIT_DELAY:
+    LOOP INIT_DELAY
+    
+    ; Function Set (8-bit, 2-line, 5x8)
+    MOV AL, 38H
+    CALL SEND_COMMAND
+    
+    ; Display ON, Cursor OFF
+    MOV AL, 0CH
+    CALL SEND_COMMAND
+    
+    ; Entry Mode (Increment, No Shift)
+    MOV AL, 06H
+    CALL SEND_COMMAND
+    
+    ; Clear Display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    RET
+LCD_INIT ENDP
+
+SEND_COMMAND PROC NEAR
+    PUSH AX
+    MOV DX, PORTB
+    MOV AH, AL              ; Save command
+    
+    ; RS=0, E=0
+    MOV AL, 00H
+    OUT DX, AL
+    
+    ; Send command to PORTA
+    MOV DX, PORTA
+    MOV AL, AH
+    OUT DX, AL
+    
+    ; Pulse E (High-Low)
+    MOV DX, PORTB
+    MOV AL, 02H             ; E=1
+    OUT DX, AL
+    CALL DELAY
+    MOV AL, 00H             ; E=0
+    OUT DX, AL
+    
+    POP AX
+    RET
+SEND_COMMAND ENDP
+
+SEND_DATA PROC NEAR
+    PUSH AX
+    MOV DX, PORTB
+    MOV AH, AL              ; Save data
+    
+    ; RS=1, E=0
+    MOV AL, 01H
+    OUT DX, AL
+    
+    ; Send data to PORTA
+    MOV DX, PORTA
+    MOV AL, AH
+    OUT DX, AL
+    
+    ; Pulse E (High-Low)
+    MOV DX, PORTB
+    MOV AL, 03H             ; RS=1, E=1
+    OUT DX, AL
+    CALL DELAY
+    MOV AL, 01H             ; RS=1, E=0
+    OUT DX, AL
+    
+    POP AX
+    RET
+SEND_DATA ENDP
+
+DisplayStringOnLCD PROC NEAR
+    PUSH SI
+    PUSH AX
+NEXT_CHAR:
+    MOV AL, [SI]
+    CMP AL, 0
+    JE END_STRING
+    CALL SEND_DATA
+    INC SI
+    JMP NEXT_CHAR
+END_STRING:
+    POP AX
+    POP SI
+    RET
+DisplayStringOnLCD ENDP
+
+;========== VOTE CONFIRMATIONS ==========
+ShowVoted1 PROC NEAR
+    ; Clear display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    
+    ; Show full message on first line
+    MOV AL, 80H            ; Line 1 start
+    CALL SEND_COMMAND
+    MOV SI, OFFSET StringVoted1
+    CALL DisplayStringOnLCD
+    
+    ; Display for 2 seconds
+    CALL LONG_DELAY
+    CALL LONG_DELAY
+    
+    ; Clear display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    RET
+ShowVoted1 ENDP
+
+ShowVoted2 PROC NEAR
+    ; Clear display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    
+    ; Show full message on first line
+    MOV AL, 80H            ; Line 1 start
+    CALL SEND_COMMAND
+    MOV SI, OFFSET StringVoted2
+    CALL DisplayStringOnLCD
+    
+    ; Display for 2 seconds
+    CALL LONG_DELAY
+    CALL LONG_DELAY
+    
+    ; Clear display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    RET
+ShowVoted2 ENDP
+
+;========== UTILITIES ==========
+DEBOUNCE PROC NEAR
+    PUSH CX
+    MOV CX, 0FFFFH
+DB_LOOP:
+    LOOP DB_LOOP
+    POP CX
+    RET
+DEBOUNCE ENDP
+
+DELAY PROC NEAR
+    PUSH CX
+    MOV CX, 1000H
+DELAY_LOOP:
+    LOOP DELAY_LOOP
+    POP CX
+    RET
+DELAY ENDP
+
+LONG_DELAY PROC NEAR
+    PUSH CX
+    MOV CX, 4
+LONG_DELAY_LOOP:
+    CALL DELAY
+    LOOP LONG_DELAY_LOOP
+    POP CX
+    RET
+LONG_DELAY ENDP
+
+;========== FINAL RESULTS ==========
+FINISH_VOTING:
+    ; Clear display
+    MOV AL, 01H
+    CALL SEND_COMMAND
+    
+    ; Show vote counts on first line
+    MOV AL, 80H            ; Line 1 start
+    CALL SEND_COMMAND
+    MOV SI, OFFSET StringResultLine1
+    CALL DisplayStringOnLCD
+    
+    ; Display candidate1 votes at column 11
+    MOV AL, 8BH
+    CALL SEND_COMMAND
+    MOV AL, Electeur1Number
+    CALL DISPLAY_NUMBER
+    
+    ; Display candidate2 votes at column 27
+    MOV AL, 9BH
+    CALL SEND_COMMAND
+    MOV AL, Electeur2Number
+    CALL DISPLAY_NUMBER
+    
+    ; Show winner on second line
+    MOV AL, 0C0H           ; Line 2 start
+    CALL SEND_COMMAND
+    
+    MOV AL, Electeur1Number
+    CMP AL, Electeur2Number
+    JA ELECTEUR1_WINS
+    JB ELECTEUR2_WINS
+    
+    ; Tie
+    MOV SI, OFFSET StringTie
+    JMP SHOW_FINAL
+
+ELECTEUR1_WINS:
+    MOV SI, OFFSET StringElecteur1Wins
+    JMP SHOW_FINAL
+
+ELECTEUR2_WINS:
+    MOV SI, OFFSET StringElecteur2Wins
+
+SHOW_FINAL:
+    CALL DisplayStringOnLCD
+    JMP $                  ; Halt system
+
+DISPLAY_NUMBER PROC NEAR
+    MOV AH, 0              ; Clear AH
+    MOV BL, 10
+    DIV BL                 ; AL=tens, AH=ones
+    
+    ADD AL, '0'            ; Convert to ASCII
+    CALL SEND_DATA
+    
+    MOV AL, AH
+    ADD AL, '0'
+    CALL SEND_DATA
+    RET
+DISPLAY_NUMBER ENDP
+
+CODE ENDS
+END START
